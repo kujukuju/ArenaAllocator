@@ -10,7 +10,7 @@
 
 #module_parameters(DEBUG := false);
 
-ARENA_BLOCK_SIZE :: 16384 * 16 * 100;
+ARENA_BLOCK_SIZE :: 16384 * 1024;
 
 ArenaAllocator :: struct {
     blocks_32: [..] [] [32] u8;
@@ -22,6 +22,8 @@ ArenaAllocator :: struct {
     available_256: [..] s32;
     available_4096: [..] s32;
     available_16384: [..] s32;
+
+    internal_allocator: Allocator;
 }
 
 get_arena_allocator :: () -> Allocator {
@@ -41,6 +43,8 @@ get_arena_allocator :: () -> Allocator {
     allocate_blocks(*arena.blocks_256, *arena.available_256);
     allocate_blocks(*arena.blocks_4096, *arena.available_4096);
     allocate_blocks(*arena.blocks_16384, *arena.available_16384);
+
+    arena.internal_allocator = context.allocator;
 
     result: Allocator;
     result.proc = arena_allocator_proc;
@@ -69,7 +73,7 @@ alloc :: (arena: *ArenaAllocator, size: int) -> *void {
     } else if size <= 16384 {
         return claim_available(*arena.blocks_16384, *arena.available_16384);
     } else {
-        return alloc(size);
+        return alloc(size,, arena.internal_allocator);
     }
 }
 
@@ -99,14 +103,19 @@ free :: (arena: *ArenaAllocator, data: *void) {
         }
     }
 
-    free(data);
+    free(data,, arena.internal_allocator);
 }
 
 free :: (block: [] [$N] u8, block_index: int, available: *[..] s32, data: *void) {
     span_count := ARENA_BLOCK_SIZE / N;
 
     byte_offset := cast(s64) (cast(u64) data - cast(u64) block.data);
+    span_index := byte_offset / N;
     index := block_index * span_count + byte_offset / N;
+
+    assert(span_index >= 0 && span_index < block.count);
+    assert(byte_offset >= 0 && byte_offset < block.count * N);
+
     array_add(available, cast(s32) index);
 }
 
@@ -122,9 +131,9 @@ claim_available :: (blocks: *[..] [] [$N] u8, available: *[..] s32) -> *void {
     available.count -= 1;
 
     block_index := next_available / span_count;
-    span_index := block_index % span_count;
+    span_index := next_available % span_count;
 
-    return *blocks.*[block_index][span_index];
+    return *(blocks.*[block_index][span_index]);
 }
 
 resize :: (arena: *ArenaAllocator, data: *void, size: int, old_size: int) -> *void {
