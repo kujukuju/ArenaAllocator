@@ -138,7 +138,7 @@ claim_available :: (blocks: *[..] [] [$N] u8, available: *[..] s32) -> *void {
 
 resize :: (arena: *ArenaAllocator, data: *void, size: int, old_size: int) -> *void {
     allocated := alloc(arena, size);
-    memcpy(allocated, data, old_size);
+    smemcpy(allocated, data, min(size, old_size));
     free(arena, data);
 
     return allocated;
@@ -218,12 +218,37 @@ arena_allocator_proc :: (mode: Allocator_Mode, requested_size: s64, old_size: s6
             return cast(*void) cast(s64) result;
 
         case .CAPS;
-            if old_memory { << cast(*string) old_memory = CAPS_VERSION_STRING; }
+            if old_memory { (cast(*string) old_memory).* = CAPS_VERSION_STRING; }
             return cast(*void) (Allocator_Caps.HINT_I_AM_A_GENERAL_HEAP_ALLOCATOR|.IS_THIS_YOURS|.ACTUALLY_RESIZE|.FREE);
 
         case;
             assert(false, "Invalid or corrupt mode passed to arena allocator. %\n", mode);
             return null;
+    }
+}
+
+smemcpy :: inline (dest: *void, source: *void, count: s64) #c_call {
+    if dest == source || count <= 0 {
+        return;
+    }
+
+    #if OS == .LINUX {
+        libc :: #system_library "libc";
+        memmove :: (dst: *void, src: *void, size: s64) -> *void #foreign libc "memmove";
+    } else #if OS == .WINDOWS {
+        Crt :: #library,system "msvcrt";
+        memmove :: (dst: *void, src: *void, size: s64) -> *void #foreign Crt "memmove";
+    } else {
+        #assert "This OS isn't supported for smemcpy.";
+    }
+
+    dest_end := dest + count;
+    source_end := source + count;
+
+    if dest_end <= source || source_end <= dest {
+        memcpy(dest, source, count);
+    } else {
+        memmove(dest, source, count);
     }
 }
 
